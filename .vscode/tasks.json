@@ -1,0 +1,365 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Infra: Build Docker Images",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: Build API Jar",
+      "type": "shell",
+      "command": "mvn -q -f services/pom.xml clean package",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: Setup Python .venv",
+      "type": "shell",
+      "command": "python3 -m venv .venv && source .venv/bin/activate && python3 -m pip install aiohttp redis",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: Start All Services",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml up -d && sleep 20 && source .venv/bin/activate && python3 infra/scripts/validate_e2e.py",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: Restart All Services",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml down -v && sleep 5 && docker compose -f infra/docker-compose.yml up -d && sleep 20 && source .venv/bin/activate && python3 infra/scripts/validate_e2e.py",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: Stop All Services",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml down -v",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: Restart Flink",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml up -d --force-recreate flink-jobmanager flink-taskmanager flink-submit",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: Restart Flink(DEBUG)",
+      "type": "shell",
+      "command": "DEBUG=true docker compose -f infra/docker-compose.yml up -d --force-recreate flink-jobmanager flink-taskmanager flink-submit",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: View Logs (taskmanager)",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml logs flink-taskmanager",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: View Logs (flink-submit)",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml logs flink-submit",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Infra: View Logs (api)",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml logs api",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Test: Flink Unit Tests",
+      "type": "shell",
+      "command": "source .venv/bin/activate && python3 -m unittest -v infra/flink/tests/test_deid_projection_job.py",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Test: API Unit Tests",
+      "type": "shell",
+      "command": "mvn -f services/pom.xml test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Test: Load Test (1M records/min equivalent)",
+      "type": "shell",
+      "command": "source .venv/bin/activate && python3 infra/scripts/inject_phi_load.py --inserts-per-second 1000 --num-inserts 1 --concurrency 500 --update-ratio 1000",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Test: Load Test (63k records/min 1 shard equivalent)",
+      "type": "shell",
+      "command": "source .venv/bin/activate && python3 infra/scripts/inject_phi_load.py --inserts-per-second 1000 --num-inserts 1 --concurrency 500 --update-ratio 63",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Test: Quick Load Test (100 inserts/sec, 5 sec)",
+      "type": "shell",
+      "command": "source .venv/bin/activate && python3 infra/scripts/inject_phi_load.py --inserts-per-second 100 --num-inserts 5 --concurrency 500 --update-ratio 1",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "DB: Count Records of phi_patient_versions vs deid_patient_versions",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml exec postgres psql -U app -d patient_events -c 'SELECT count(*) FROM phi_patient_versions;SELECT count(*) FROM deid_patient_versions;'",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "new"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Kafka: List Topics",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml exec kafka /usr/bin/kafka-topics --bootstrap-server kafka:9092 --list -e",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Kafka: Show phi_patient_versions Topic Size",
+      "type": "shell",
+      "command": "docker run --rm -it --network infra_default edenhill/kcat:1.7.1 -b kafka:9092 -t phi_patient_versions -C -o end -e",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Kafka: Show phi_patient_versions_deletes Topic Size",
+      "type": "shell",
+      "command": "docker run --rm -it --network infra_default edenhill/kcat:1.7.1 -b kafka:9092 -t phi_patient_versions_deletes -C -o end -e",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Kafka: Show deid_dlq Topic Size",
+      "type": "shell",
+      "command": "docker run --rm -it --network infra_default edenhill/kcat:1.7.1 -b kafka:9092 -t deid_dlq -C -o end -e",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Redis: Show All Keys",
+      "type": "shell",
+      "command": "docker compose -f infra/docker-compose.yml exec redis redis-cli KEYS \"*\"",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "Redis: Show Latency end to End",
+      "type": "shell",
+      "command": "source .venv/bin/activate && python3 infra/scripts/redis_latency_stats.py --limit -1",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    },
+    {
+      "label": "API: Create Patient (example)",
+      "type": "shell",
+      "command": "curl -X POST http://localhost:8080/api/v1/patient -H \"Content-Type: application/json\" -d '{\"event_id\": \"550e8400-e29b-41d4-a716-446655440000\", \"name\": \"Jane Smith\", \"dob\": \"1985-03-20\", \"favorite_color\": \"red\"}'",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": false
+      }
+    }
+  ]
+}

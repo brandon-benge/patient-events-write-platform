@@ -1,0 +1,16 @@
+name: Run Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install -r infra/flink/requirements.txt
+      - run: python3 -m unittest infra/flink/tests/test_deid_projection_job.py -v

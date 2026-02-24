@@ -1,0 +1,234 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-role
+      author: infra
+      runInTransaction: false
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: '0'
+            sql: "SELECT COUNT(*) FROM pg_catalog.pg_roles WHERE rolname='app';"
+      changes:
+        - sql:
+            sql: "CREATE ROLE app LOGIN PASSWORD 'app';"
+
+  - changeSet:
+      id: 009-enable-pgcrypto
+      author: design
+      changes:
+        - sql:
+            sql: "CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+
+  - changeSet:
+      id: 010-phi-head
+      author: design
+      changes:
+        - createTable:
+            tableName: phi_patient_head
+            columns:
+              - column:
+                  name: phi_id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: de_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    unique: true
+              - column:
+                  name: current_version
+                  type: int
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: persisted_version
+                  type: int
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: last_updated_at
+                  type: timestamp
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: 011-phi-versions
+      author: design
+      changes:
+        - createTable:
+            tableName: phi_patient_versions
+            columns:
+              - column:
+                  name: phi_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: de_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: event_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: request_hash
+                  type: varchar(64)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: version
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: varchar(128)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: dob
+                  type: date
+                  constraints:
+                    nullable: true
+              - column:
+                  name: favorite_color
+                  type: varchar(64)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: timestamp
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: phi_patient_versions
+            columnNames: phi_id, version
+            constraintName: pk_phi_versions
+        - createIndex:
+            tableName: phi_patient_versions
+            indexName: idx_phi_versions_phi
+            columns:
+              - column:
+                  name: phi_id
+        - createIndex:
+            tableName: phi_patient_versions
+            indexName: idx_phi_versions_event
+            columns:
+              - column:
+                  name: event_id
+
+  - changeSet:
+      id: 030-deid-versions
+      author: design
+      changes:
+        - createTable:
+            tableName: deid_patient_versions
+            columns:
+              - column:
+                  name: de_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: version
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: favorite_color
+                  type: varchar(64)
+                  constraints:
+                    nullable: true
+              - column:
+                  name: created_at
+                  type: timestamp
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: deid_patient_versions
+            columnNames: de_id, version
+            constraintName: pk_deid_versions
+
+  - changeSet:
+      id: 031-deid-projection-latency-view
+      author: design
+      changes:
+        - sql:
+            sql: |
+              CREATE VIEW deid_projection_latency AS
+              SELECT 
+                pph.de_id,
+                pph.phi_id,
+                pph.current_version,
+                pph.persisted_version,
+                ppv.created_at as phi_created_at,
+                dpv.created_at as deid_created_at,
+                EXTRACT(EPOCH FROM (dpv.created_at - ppv.created_at)) as latency_seconds,
+                EXTRACT(EPOCH FROM (dpv.created_at - ppv.created_at)) * 1000 as latency_ms
+              FROM phi_patient_head pph
+              LEFT JOIN phi_patient_versions ppv 
+                ON pph.phi_id = ppv.phi_id AND pph.current_version = ppv.version
+              LEFT JOIN deid_patient_versions dpv 
+                ON pph.de_id = dpv.de_id AND pph.current_version = dpv.version;
+
+  - changeSet:
+      id: 040-phi-head-write-tuning
+      author: design
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE phi_patient_head
+              SET (fillfactor = 90);
+
+              ALTER TABLE phi_patient_head
+              SET (
+                autovacuum_vacuum_scale_factor = 0.02,
+                autovacuum_analyze_scale_factor = 0.02
+              );
+
+  - changeSet:
+      id: 041-phi-version-purge-trigger
+      author: design
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE OR REPLACE FUNCTION purge_old_phi_versions_on_persisted_update()
+              RETURNS trigger
+              LANGUAGE plpgsql
+              AS $$
+              BEGIN
+                DELETE FROM phi_patient_versions
+                WHERE phi_id = NEW.phi_id
+                  AND version < NEW.persisted_version;
+
+                RETURN NEW;
+              END;
+              $$;
+
+        - sql:
+            sql: |
+              CREATE TRIGGER trg_purge_old_phi_versions_on_persisted_update
+              AFTER UPDATE OF persisted_version ON phi_patient_head
+              FOR EACH ROW
+              WHEN (OLD.persisted_version IS DISTINCT FROM NEW.persisted_version)
+              EXECUTE FUNCTION purge_old_phi_versions_on_persisted_update();
+
+  - changeSet:
+      id: 042-phi-versions-replica-identity-full
+      author: design
+      changes:
+        - sql:
+            sql: |
+              ALTER TABLE phi_patient_versions REPLICA IDENTITY FULL;
