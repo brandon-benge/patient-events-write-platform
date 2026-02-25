@@ -173,7 +173,7 @@ Note: Failed PHI transactions do not commit identifier assignments; UUID default
 Guarantee: 
 - The De-ID store is immutable by (de_id, version) (PK). Replays may attempt to write the same key again; duplicate writes must have an idempotent effect (either ON CONFLICT DO NOTHING or “duplicate key treated as success”) and must never overwrite an existing record.
 
-### Invariant 9: Persisted Version Monotonicity
+### Invariant 9: Persisted Version Monotonicity(fencing-pattern)
 
 Guarantee:
 - The PHI head row tracks both `current_version` and `persisted_version`.
@@ -187,7 +187,7 @@ Guarantee:
 - De-ID persistence is driven from the cdc/Kafka pipeline and is immutable/idempotent by `(de_id, version)`.
 - Redis status is used for dedupe and client-visible receipt during the 4-hour window; loss of Redis status after admission does not affect the correctness of already-committed PHI/cdc/De-ID work.
 
-### Invariant 11: Stale or Late Updates
+### Invariant 11: Stale or Late Updates(fencing-pattern)
 
 Guarantee:
 - The PHI head must never regress below `persisted_version`.
