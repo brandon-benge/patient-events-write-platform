@@ -23,6 +23,7 @@ Targets: Throughput: 1,000,000 writes/min (~16,667/sec) at ~20KB/request. Latenc
 Full Solution:    
 - [Architecture](./ARCHITECTURE.md) 
 - [Trade Offs](./TRADEOFFs.md) 
+- [Testing Guide](./docs/TESTING.md)
 
 ### AI Coding Outline Prompt:
 - `ARCHITECTURE.md` is the authoritative design and invariants  
