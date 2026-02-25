@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import time
+import uuid
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -195,20 +196,221 @@ def validate_postgres_purge_trigger() -> None:
     trigger_test_script = ROOT / "infra" / "scripts" / "test_persisted_version_purge_trigger.py"
     if not trigger_test_script.exists():
         raise RuntimeError(f"Purge trigger test script not found at {trigger_test_script}")
-    
+
     result = subprocess.run(
         [sys.executable, str(trigger_test_script), "--compose-file", str(COMPOSE_FILE)],
         cwd=ROOT,
         text=True,
         capture_output=True,
     )
-    
+
     if result.returncode != 0:
         raise RuntimeError(
             f"Purge trigger test failed with exit code {result.returncode}\n"
             f"stdout: {result.stdout}\n"
             f"stderr: {result.stderr}"
         )
+
+def _kafka_offsets_cmd(topic: str) -> str:
+    return (
+        "set -e; "
+        "for c in "
+        "'kafka-run-class kafka.tools.GetOffsetShell' "
+        "'/opt/bitnami/kafka/bin/kafka-run-class.sh kafka.tools.GetOffsetShell' "
+        "'/opt/kafka/bin/kafka-run-class.sh kafka.tools.GetOffsetShell'; "
+        "do "
+        "  bin=$(echo \"$c\" | cut -d' ' -f1); "
+        "  if command -v \"$bin\" >/dev/null 2>&1 || [ -x \"$bin\" ]; then "
+        "    sh -lc \"$c --bootstrap-server kafka:9092 --topic "
+        + topic
+        + " --time -1\"; "
+        "    exit $?; "
+        "  fi; "
+        "done; "
+        "echo 'ERROR: GetOffsetShell CLI not found in kafka container.' >&2; "
+        "exit 127"
+    )
+
+
+def get_topic_total_offset(topic: str) -> int:
+    out = run(
+        compose_cmd("exec", "-T", "kafka", "sh", "-lc", _kafka_offsets_cmd(topic)),
+        check=False,
+    )
+    if "ERROR: GetOffsetShell CLI not found" in out:
+        raise RuntimeError("GetOffsetShell CLI not found in kafka container")
+
+    total = 0
+    found = False
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        parts = line.split(":")
+        if len(parts) != 3:
+            continue
+        if parts[0] != topic:
+            continue
+        found = True
+        total += int(parts[2])
+    if not found:
+        return 0
+    return total
+
+
+def post_create_patient(event_id: str, favorite_color: str = "red") -> tuple[int, dict]:
+    payload = {
+        "event_id": event_id,
+        "name": "E2E Jane",
+        "dob": "1990-01-01",
+        "favorite_color": favorite_color,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        "http://localhost:8080/api/v1/patient",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            return resp.status, body
+    except urllib.error.HTTPError as exc:
+        body = json.loads(exc.read().decode("utf-8"))
+        return exc.code, body
+
+
+def _query_head(phi_id: str) -> tuple[str, int, int] | None:
+    q = (
+        "SELECT de_id::text, current_version, persisted_version "
+        "FROM phi_patient_head WHERE phi_id = '{}'::uuid;".format(phi_id)
+    )
+    out = run(
+        compose_cmd(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            DB_USER,
+            "-d",
+            DB_NAME,
+            "-tA",
+            "-F",
+            ",",
+            "-c",
+            q,
+        ),
+        check=False,
+    )
+    row = out.strip()
+    if not row:
+        return None
+    parts = row.split(",")
+    if len(parts) != 3:
+        return None
+    return parts[0], int(parts[1]), int(parts[2])
+
+
+def _deid_row_exists(de_id: str, version: int) -> bool:
+    q = (
+        "SELECT COUNT(*) FROM deid_patient_versions "
+        "WHERE de_id = '{}'::uuid AND version = {};".format(de_id, version)
+    )
+    out = run(
+        compose_cmd(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            DB_USER,
+            "-d",
+            DB_NAME,
+            "-tA",
+            "-c",
+            q,
+        ),
+        check=False,
+    )
+    return out.strip() == "1"
+
+
+def _produce_invalid_cdc_record() -> None:
+    cmd = (
+        "echo '{\"payload\":{\"after\":{\"phi_id\":\"not-a-uuid\"}}}' | "
+        "docker run --rm -i --network infra_default edenhill/kcat:1.7.1 "
+        "-b kafka:9092 -t phi_patient_versions -P"
+    )
+    result = subprocess.run(cmd, shell=True, cwd=ROOT, text=True, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Failed to produce invalid CDC message for DLQ check\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+
+
+def validate_cdc_projection_flow(timeout_seconds: int = 120, check_dlq: bool = False) -> None:
+    before_cdc = get_topic_total_offset("phi_patient_versions")
+
+    event_id = str(uuid.uuid4())
+    status, body = post_create_patient(event_id)
+    if status != 202:
+        raise RuntimeError(f"Create request expected 202, got {status}: {body}")
+
+    phase = body.get("phase")
+    phi_id = body.get("phi_id")
+    version = body.get("version")
+
+    if phase != "PHI_COMMITTED" or not phi_id or not isinstance(version, int):
+        raise RuntimeError(f"Unexpected create response shape: {body}")
+
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        now_cdc = get_topic_total_offset("phi_patient_versions")
+        if now_cdc > before_cdc:
+            break
+        time.sleep(1)
+    else:
+        raise TimeoutError("CDC topic offset did not advance after PHI commit")
+
+    deadline = time.time() + timeout_seconds
+    last_observed = None
+    while time.time() < deadline:
+        head = _query_head(phi_id)
+        if head is None:
+            time.sleep(1)
+            continue
+
+        de_id, current_version, persisted_version = head
+        last_observed = head
+
+        if current_version < version:
+            time.sleep(1)
+            continue
+
+        if _deid_row_exists(de_id, version) and persisted_version >= version:
+            break
+        time.sleep(1)
+    else:
+        raise TimeoutError(
+            "Projection did not converge to immutable De-ID + persisted_version advance. "
+            f"phi_id={phi_id}, expected_version={version}, last_observed={last_observed}"
+        )
+
+    if check_dlq:
+        before_dlq = get_topic_total_offset("deid_dlq")
+        _produce_invalid_cdc_record()
+
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            now_dlq = get_topic_total_offset("deid_dlq")
+            if now_dlq > before_dlq:
+                return
+            time.sleep(1)
+        raise TimeoutError("DLQ topic offset did not advance after invalid CDC message")
 
 
 
@@ -377,15 +579,20 @@ def main() -> int:
         default=10,
         help="Seconds to wait for required services to be running/healthy.",
     )
+    parser.add_argument(
+        "--check-dlq",
+        action="store_true",
+        help="Also produce an invalid CDC event and verify deid_dlq receives an envelope.",
+    )
     args = parser.parse_args()
 
-    print("[1/9] Validating docker compose stack is already running")
+    print("[1/10] Validating docker compose stack is already running")
     ensure_stack_running(timeout_seconds=args.timeout)
 
-    print("[2/9] Validating API port is reachable (no business calls)")
+    print("[2/10] Validating API port is reachable (no business calls)")
     wait_for_api(timeout_seconds=args.timeout)
 
-    print("[3/9] Validating Kafka Connect REST is reachable")
+    print("[3/10] Validating Kafka Connect REST is reachable")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
         try:
@@ -397,23 +604,26 @@ def main() -> int:
     else:
         raise TimeoutError("Kafka Connect (8083) did not become reachable")
 
-    print("[4/9] Validating Debezium connector is registered in Kafka Connect")
+    print("[4/10] Validating Debezium connector is registered in Kafka Connect")
     validate_kafka_connect_connectors(timeout_seconds=args.timeout)
 
-    print("[5/9] Validating Postgres schema + required tables")
+    print("[5/10] Validating Postgres schema + required tables")
     validate_postgres_schema(timeout_seconds=args.timeout)
 
-    print("[6/9] Validating Postgres purge trigger on persisted_version")
+    print("[6/10] Validating Postgres purge trigger on persisted_version")
     validate_postgres_purge_trigger()
 
-    print("[7/9] Validating Kafka topics exist")
+    print("[7/10] Validating Kafka topics exist")
     validate_kafka_topics(timeout_seconds=args.timeout)
 
-    print("[8/9] Validating Flink has a connected TaskManager and a RUNNING job")
+    print("[8/10] Validating Flink has a connected TaskManager and a RUNNING job")
     validate_flink_job_running(timeout_seconds=args.timeout)
 
-    print("[9/9] Validating Redis connectivity + warmup")
+    print("[9/10] Validating Redis connectivity + warmup")
     validate_redis_connectivity(timeout_seconds=args.timeout)
+
+    print("[10/10] Validating CDC -> De-ID persistence -> persisted_version confirmation")
+    validate_cdc_projection_flow(timeout_seconds=max(args.timeout, 60), check_dlq=args.check_dlq)
 
     print("\nINFRA VALIDATION PASSED")
     return 0

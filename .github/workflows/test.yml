@@ -1,16 +1,42 @@
-name: Run Tests
+name: infra and flink tests
 
 on:
   push:
   pull_request:
 
 jobs:
-  test:
+  flink-unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python3 -m pip install -r infra/flink/requirements.txt
       - run: python3 -m unittest infra/flink/tests/test_deid_projection_job.py -v
+
+  e2e-compose-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build API jar
+        run: mvn -B -f services/pom.xml clean package -DskipTests
+
+      - name: Start compose stack and run e2e validator
+        run: |
+          docker compose -f infra/docker-compose.yml up -d
+          python3 infra/scripts/validate_e2e.py --timeout 180
+
+      - name: Stop compose stack
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

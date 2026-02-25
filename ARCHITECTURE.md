@@ -1101,6 +1101,9 @@ This take-home focuses on **3** high-value automated checks that collectively va
 ### 18.1 Admission + Idempotency Contract (API + Redis)
 **Location:** `services/tests/` (JUnit) or `services/tests/integration/` (preferred)
 
+Current implementation:
+- `services/src/test/java/com/patienteventswriteplatform/patient/AdmissionIdempotencyIntegrationTest.java`
+
 Validates:
 - New `event_id` is admitted only if Redis `SET NX EX 4h` succeeds; Redis unavailable => fail closed.
 - Duplicate `event_id` with same `request_hash` returns **HTTP 200** with latest receipt (phase + `phi_id/version` if present) and **does not start new work**.
@@ -1109,6 +1112,9 @@ Validates:
 
 ### 18.2 Phase-1 Atomic Commit + Receipt Gating (API + Postgres)
 **Location:** `services/tests/` (JUnit; can be Testcontainers-based)
+
+Current implementation:
+- `services/src/test/java/com/patienteventswriteplatform/patient/Phase1AtomicCommitReceiptGatingIntegrationTest.java`
 
 Validates:
 - A successful commit writes, in a single transaction:
@@ -1119,6 +1125,14 @@ Validates:
 
 ### 18.3 End-to-End CDC → De-ID Persistence → persisted_version Confirmation (Validation Script)
 **Location:** `infra/` or `scripts/` (e.g., `scripts/validate_e2e.sh` or `scripts/validate_e2e.py`)
+
+Current implementation:
+- `infra/scripts/validate_e2e.py` now includes an active flow validation that:
+  1. creates a patient via API,
+  2. verifies `phi_patient_versions` topic offset advancement,
+  3. verifies immutable De-ID row persistence,
+  4. verifies `phi_patient_head.persisted_version` advances to the committed version,
+  5. optionally verifies DLQ by injecting an invalid CDC record (`--check-dlq`).
 
 Validates:
 - A committed insert into `phi_patient_versions` appears on the CDC topic (Debezium).
@@ -1140,6 +1154,14 @@ Validates:
 - Test validates Invariants 12, 13 (purge atomicity and safety).
 - Run with `DEBUG=true` for verbose output; silent mode by default.
 - Integrated into `validate_e2e.py` as part of Postgres validation checks.
+
+### 18.5 Existing Unit Tests Already Present
+
+Java (API):
+- `services/src/test/java/com/patienteventswriteplatform/patient/RequestHashServiceTest.java`
+
+Python (Flink):
+- `infra/flink/tests/test_deid_projection_job.py`
 
 ## Appendix A. Phase Semantics (Quick Reference)
 
