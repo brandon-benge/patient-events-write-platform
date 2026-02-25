@@ -13,28 +13,23 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.patienteventswriteplatform.patient.service.IdempotencyService;
 import java.util.Map;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockReset;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.test.util.AopTestUtils;
 
 @EnabledIfEnvironmentVariable(named = "RUN_INTEGRATION_TESTS", matches = "true")
 class Phase1AtomicCommitReceiptGatingIntegrationTest extends IntegrationTestBase {
   @Autowired private TestRestTemplate restTemplate;
 
-  @SpyBean private IdempotencyService idempotencyService;
-
-  @AfterEach
-  void resetSpy() {
-    org.mockito.Mockito.reset(AopTestUtils.getUltimateTargetObject(idempotencyService));
-  }
+  @SpyBean(reset = MockReset.AFTER)
+  private IdempotencyService idempotencyService;
 
   @Test
   void successfulCreateWritesHeadAndVersionAndReceiptIsCommitted() throws Exception {
